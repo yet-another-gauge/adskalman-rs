@@ -33,6 +33,9 @@ use nalgebra::{
 
 use num_traits::identities::One;
 
+// Custom Residual
+pub type ResidualFunction<R, D> = dyn Fn(&na::Vector<R, D, na::Owned<R, D>>, &na::Vector<R, D, na::Owned<R, D>>) -> na::Vector<R, D, na::Owned<R, D>> + Sync;
+
 // Without std, create a dummy trace!() macro.
 #[cfg(not(feature = "std"))]
 macro_rules! trace {
@@ -167,6 +170,8 @@ where
         prior: &StateAndCovariance<R, SS>,
         observation: &Vector<R, OS, Owned<R, OS>>,
         covariance_method: CovarianceUpdateMethod,
+        // Custom Residual
+        residual_fn: Option<&ResidualFunction<R, OS>>,
     ) -> Result<StateAndCovariance<R, SS>, Error> {
         let h = self.H();
         trace!("h {}", pretty_print!(h));
@@ -210,7 +215,12 @@ where
         let predicted: Vector<R, OS, _> = self.predict_observation(prior.state());
         trace!("predicted {}", pretty_print!(predicted));
         trace!("observation {}", pretty_print!(observation));
-        let innovation: Vector<R, OS, _> = observation - predicted;
+        // Custom Residual
+        let innovation: Vector<R, OS, _> = if let Some(f) = residual_fn {
+                        f(observation, &predicted)
+                    } else {
+                        observation - predicted
+                    };
         trace!("innovation {}", pretty_print!(innovation));
         let state: Vector<R, SS, _> = prior.state() + &k_gain * innovation;
         trace!("state {}", pretty_print!(state));
@@ -332,6 +342,7 @@ where
             previous_estimate,
             observation,
             CovarianceUpdateMethod::JosephForm,
+            None,
         )
     }
 
@@ -349,13 +360,15 @@ where
         previous_estimate: &StateAndCovariance<R, SS>,
         observation: &Vector<R, OS, Owned<R, OS>>,
         covariance_update_method: CovarianceUpdateMethod,
+        // Custom Residual
+        residual_fn: Option<&ResidualFunction<R, OS>>,
     ) -> Result<StateAndCovariance<R, SS>, Error> {
         let prior = self.transition_model.predict(previous_estimate);
         if observation.iter().any(|x| is_nan(x.clone())) {
             Ok(prior)
         } else {
             self.observation_matrix
-                .update(&prior, observation, covariance_update_method)
+                .update(&prior, observation, covariance_update_method, residual_fn)
         }
     }
 
